@@ -1,56 +1,62 @@
-# 🛡️ Sistema de Aislamiento Lógico para Backups
+# 🛡️ Estrategia de Respaldo Seguro (Cobian Reflector + PowerShell)
 
-Este conjunto de scripts implementa una estrategia de **aislamiento lógico** y **protección contra escritura** para unidades de copia de seguridad. El objetivo es mitigar el impacto de ataques de ransomware mediante el estado *Offline* del disco y la inmutabilidad de los datos.
+Este proyecto implementa una arquitectura de copias de seguridad de nivel profesional (L3) diseñada para mitigar riesgos de Ransomware mediante la gestión de discos **Offline**, permisos restrictos y rotación automática de logs.
 
-## 📋 Inventario de Scripts
+## 🚀 Concepto: Air-Gap Lógico y Automatización
 
-| Script | Propósito |
+Para garantizar la integridad de los datos, el sistema utiliza **Hooks** (Eventos) secuenciales gestionados por Cobian Reflector. El disco de destino permanece invisible y en modo solo lectura mientras no hay una tarea activa.
+
+1.  **Pre-Backup:** Montaje del disco y activación de modo lectura/escritura.
+2.  **Backup:** Ejecución de copia Incremental (basada en el atributo de archivo).
+3.  **Post-Backup 1:** Desmontaje y bloqueo del disco (Estado Offline).
+4.  **Post-Backup 2:** Rotación de logs para mantenimiento de espacio.
+
+---
+
+## 📋 1. Preparación de la Identidad (Hardening)
+
+1.  **Creación de Usuario:**
+    Ejecute `CreateDedicatedBackupUser.ps1` como Administrador. 
+    * Crea la cuenta `Svc_BackupAdmin` y restringe el inicio de sesión interactivo/RDP.
+2.  **Configuración del Servicio:**
+    * Abra `services.msc` y localice **Cobian Reflector - Motor**.
+    * Cambie el inicio de sesión a la cuenta `.\Svc_BackupAdmin`.
+    * **Reinicie el servicio** para aplicar cambios.
+
+---
+
+## ⚙️ 2. Configuración de la Tarea en Cobian
+
+Configure la tarea **"Backup D: COMPLETO"** con los siguientes parámetros clave:
+
+### 🔹 Dinámica y Ciclo de Vida
+* **Copias completas a conservar:** `1`
+* **Hacer un respaldo completo cada:** `0` (Cero).
+* **Lógica:** El script `mount_backup.ps1` formatea el disco el día 1 del mes, forzando a Cobian a iniciar un nuevo ciclo de forma automática.
+
+### 🔹 Filtros de Exclusión
+Añada en **"Excluir estos ficheros"**:
+* Directorios: `System Volume Information`, `$RECYCLE.BIN`.
+* Máscaras: `*.tmp`, `~$*`, `Thumbs.db`, `desktop.ini`.
+
+### ⚡ Eventos (Hooks de Línea de Comando)
+Añada los comandos habilitando siempre la opción **"Esperar por finalización"**:
+
+**A. Pre-Respaldo:**
+* `powershell.exe -ExecutionPolicy Bypass -File "C:\informatica\backups\mount_backup.ps1"`
+
+**B. Post-Respaldo (En este orden):**
+1.  `powershell.exe -ExecutionPolicy Bypass -File "C:\informatica\backups\UnmountBackup.ps1"`
+2.  `powershell.exe -ExecutionPolicy Bypass -File "C:\informatica\backups\Optional-Maintain-BackupLogs.ps1"`
+
+---
+
+## 🛠️ 3. Herramientas de Gestión y Diagnóstico
+
+Todos los archivos deben ubicarse en `C:\informatica\backups`.
+
+| Archivo | Función |
 | :--- | :--- |
-| `CreateDedicatedBackupUser.ps1` | Crea el usuario `Svc_BackupAdmin` y aplica el blindaje de seguridad (Hardening). |
-| `Test-BackupUserSetup.ps1` | Audita y confirma que la cuenta técnica tiene los permisos y restricciones correctas. |
-| `MountBackup.ps1` | Pone el disco **Online** y quita el modo **Solo Lectura**. |
-| `UnmountBackup.ps1` | Activa el modo **Solo Lectura** y pone el disco **Offline**. |
-| `Optional-Maintain-BackupLogs.ps1` | **(Opcional)** Limpia los archivos de log que superen los 10MB para ahorrar espacio. |
-
----
-
-## 🛠️ Configuración Inicial
-
-1. **Identificación del Hardware:**
-   Es crítico usar el `UniqueId` para evitar confusiones de unidades. Obtén el ID con:
-   ```powershell
-   Get-Disk | Select-Object Number, FriendlyName, UniqueId
-   ```
-2. **Directorios:**
-   Asegúrate de que la ruta de logs exista y tenga permisos restringidos:
-   `C:\informatica\backups`
-
----
-
-## 🔐 Blindaje de Seguridad (Hardening)
-
-La cuenta de servicio `Svc_BackupAdmin` ha sido configurada bajo el principio de **Menor Privilegio**:
-* **Permitido:** Iniciar sesión como trabajo por lotes (`SeBatchLogonRight`).
-* **Denegado:** Inicio de sesión local e interactivo (Consola física).
-* **Denegado:** Acceso por Escritorio Remoto (RDP).
-
----
-
-## ⚙️ Programador de Tareas de Windows
-
-Configura las tareas con los siguientes parámetros:
-
-* **Usuario:** `Svc_BackupAdmin`
-* **Opciones:** "Ejecutar tanto si el usuario inició sesión como si no" + "Privilegios más altos".
-* **Argumentos:**
-    * **Montaje:** `-ExecutionPolicy Bypass -File "C:\informatica\backups\MountBackup.ps1"`
-    * **Desmontaje:** `-ExecutionPolicy Bypass -File "C:\informatica\backups\UnmountBackup.ps1"`
-    * **Mantenimiento (Opcional):** `-ExecutionPolicy Bypass -File "C:\informatica\backups\Optional-Maintain-BackupLogs.ps1"`
-
----
-
-## ⚠️ Gestión de Errores e Integridad
-
-* **Exit Codes:** Los scripts devuelven `exit 1` en caso de fallo crítico. 
-* **Logs:** Las operaciones se registran en `montajes.log` y `desmontajes.log`.
-* **Estrategia:** El disco permanece en estado **Offline** y **ReadOnly** la mayor parte del tiempo, reduciendo la superficie de ataque frente a malware.
+| `mount_backup.ps1` | Monta el disco y aplica formateo si es día 1 del mes. |
+| `UnmountBackup.ps1` | Pone el disco en modo Solo Lectura y Offline. |
+| `Optional-Maintain-BackupLogs.ps1` | Elimina logs de la carpeta que superen los 10MB

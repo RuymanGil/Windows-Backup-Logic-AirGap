@@ -1,6 +1,7 @@
 # ==============================================================================
 # Nombre: CreateDedicatedBackupUser.ps1
-# Función: Creación de usuario técnico y Hardening (Restricciones de seguridad)
+# Función: Creación de usuario técnico habilitado para login y recuperación
+# Autor: Ruymán Gil García - SysAdmin L3
 # ==============================================================================
 
 # 1. Configuración de variables
@@ -12,57 +13,75 @@ Write-Host "--- Iniciando despliegue de cuenta técnica: $username ---" -Foregrou
 
 # 2. Creación del usuario local
 if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
-    Write-Host "[!] El usuario $username ya existe. Saltando creación..." -ForegroundColor Yellow
+    Write-Host "[!] El usuario $username ya existe. Verificando configuración..." -ForegroundColor Yellow
 } else {
     Write-Host "[+] Creando usuario local..." -ForegroundColor White
+    
     New-LocalUser -Name $username `
                   -Password $password `
-                  -Description "Cuenta de servicio para backups automatizados." `
-                  -PasswordNeverExpires $true `
-                  -UserMayNotChangePassword $true | Out-Null
+                  -Description "Cuenta para backups y recuperación de datos." `
+                  -PasswordNeverExpires `
+                  -UserMayNotChangePassword | Out-Null
     
-    # Añadir al grupo Administradores (Requerido para Set-Disk)
-    Add-LocalGroupMember -Group "Administradores" -Member $username
-    Write-Host "[+] Usuario creado y añadido al grupo Administradores." -ForegroundColor Green
+    Write-Host "[+] Usuario creado exitosamente." -ForegroundColor Green
 }
 
-# 3. Configuración de derechos de usuario (secedit)
-Write-Host "[+] Configurando políticas de seguridad (Hardening)..." -ForegroundColor White
+# 2.1 Asegurar pertenencia al grupo Administradores
+try {
+    $group = "Administradores"
+    $isMember = Get-LocalGroupMember -Group $group -Member $username -ErrorAction SilentlyContinue
+    
+    if (-not $isMember) {
+        Add-LocalGroupMember -Group $group -Member $username -ErrorAction Stop
+        Write-Host "[+] Usuario añadido al grupo $group." -ForegroundColor Green
+    } else {
+        Write-Host "[*] El usuario ya pertenece al grupo $group." -ForegroundColor Gray
+    }
+}
+catch {
+    Write-Host "[ERROR] No se pudo añadir al grupo Administradores: $_" -ForegroundColor Red
+}
 
-# Exportar configuración actual
+# 3. Configuración de derechos de usuario
+Write-Host "[+] Configurando políticas de acceso..." -ForegroundColor White
+
 secedit /export /cfg $tempFile /areas USER_RIGHTS | Out-Null
-
-# Leer contenido
 $config = Get-Content $tempFile -Raw
 
-# Función interna para procesar derechos
 function Add-Right {
     param($configString, $rightName, $user)
     if ($configString -match "$rightName = ") {
-        # Si el derecho existe, añade el usuario si no está ya presente
         if ($configString -notmatch "$rightName = .*$user") {
             return $configString -replace "($rightName = .*?)(?=\r?\n|$)", "`$1,$user"
         }
         return $configString
-    } else {
-        return $configString + "`r`n$rightName = $user"
+    } 
+    else {
+        if ($configString -match "\[Privilege Rights\]") {
+            return $configString -replace "\[Privilege Rights\]", "[Privilege Rights]`r`n$rightName = $user"
+        } else {
+            return $configString + "`r`n[Privilege Rights]`r`n$rightName = $user"
+        }
     }
 }
 
-# Aplicar derechos y restricciones
-# A. Permitir ejecución de tareas programadas
+# --- CONFIGURACIÓN DE ACCESO ---
+
+# A. Permitir ejecución de tareas programadas (Necesario para Cobian)
 $config = Add-Right -configString $config -rightName "SeBatchLogonRight" -user $username
-# B. RESTRICCIÓN: Impedir inicio de sesión físico
-$config = Add-Right -configString $config -rightName "SeDenyInteractiveLogonRight" -user $username
-# C. RESTRICCIÓN: Impedir acceso por Escritorio Remoto (RDP)
-$config = Add-Right -configString $config -rightName "SeDenyRemoteInteractiveLogonRight" -user $username
+
+# B. Permitir inicio de sesión local (Necesario para entrar y recuperar archivos)
+$config = Add-Right -configString $config -rightName "SeInteractiveLogonRight" -user $username
+
+# NOTA: Se han eliminado 'SeDenyInteractiveLogonRight' y 'SeDenyRemoteInteractiveLogonRight' 
+# para permitir que el usuario pueda loguearse en el sistema.
 
 # 4. Importar configuración final
-$config | Out-File $tempFile -Encoding ascii
-secedit /configure /db $env:windir\security\local.sdb /cfg $tempFile /areas USER_RIGHTS | Out-Null
+$config | Out-File $tempFile -Encoding Default
+secedit /configure /db "$env:windir\security\local.sdb" /cfg $tempFile /areas USER_RIGHTS | Out-Null
 
 # 5. Limpieza
 if (Test-Path $tempFile) { Remove-Item $tempFile }
 
-Write-Host "--- Proceso finalizado con éxito ---" -ForegroundColor Green
-Write-Host "La cuenta $username está lista y blindada contra accesos humanos." -ForegroundColor White
+Write-Host "--- Proceso finalizado ---" -ForegroundColor Green
+Write-Host "La cuenta $username ahora puede iniciar sesión para tareas de recuperación." -ForegroundColor White

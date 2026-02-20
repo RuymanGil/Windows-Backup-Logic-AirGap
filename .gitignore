@@ -1,0 +1,21 @@
+# --- Windows ---
+[Dd]esktop.ini
+Thumbs.db
+$RECYCLE.BIN/
+
+# --- PowerShell ---
+# Evita subir los logs locales (pueden contener rutas o datos sensibles)
+*.log
+# Archivos temporales de edición
+*.bak
+*.tmp
+*.swp
+
+# --- Editores (VS Code / ISE) ---
+.vscode/
+*.history
+*.ps1xml
+
+# --- Archivos de configuración local ---
+config.local
+*.secret

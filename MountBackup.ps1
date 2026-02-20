@@ -1,24 +1,31 @@
-# Configuración
-$UniqueId = "AQUÍ_TU_UNIQUE_ID" # Sustituye por el ID obtenido
-$LogPath = "C:\informatica\backups\montajes.log"
+# --- CONFIGURACIÓN ---
+$UniqueId = "PON-AQUI-TU-UniqueID" 
+$LogPath = "C:\informatica\backups\backup_system.log"
+$ErrorActionPreference = "Continue" # Importante: Que no se pare por errores no críticos
 
-# Asegurar que el directorio de logs existe
-if (!(Test-Path "C:\informatica\backups")) { New-Item -ItemType Directory -Path "C:\informatica\backups" -Force | Out-Null }
-
-$TimeStamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$TimeStamp = Get-Date -Format "dd-MM-yyyy HH:mm:ss"
+"--- $TimeStamp INICIANDO MONTAJE ---" | Out-File $LogPath -Append
 
 try {
-    $targetDisk = Get-Disk -UniqueId $UniqueId -ErrorAction Stop
+    # 1. Poner Online y Quitar Solo Lectura de forma directa
+    Set-Disk -UniqueId $UniqueId -IsOffline $false -ErrorAction SilentlyContinue
+    Set-Disk -UniqueId $UniqueId -IsReadOnly $false -ErrorAction SilentlyContinue
+    
+    # 2. Pausa de 12 segundos (Margen para que Windows asigne letra E:)
+    Start-Sleep -Seconds 12
 
-    # 1. Poner el disco Online
-    $targetDisk | Set-Disk -IsOffline $false -ErrorAction Stop
+    # 3. Comprobación final
+    $disk = Get-Disk -UniqueId $UniqueId
+    $part = Get-Partition -DiskNumber $disk.Number | Where-Object { $_.DriveLetter -ne $null }
     
-    # 2. Quitar el atributo de Solo Lectura
-    $targetDisk | Set-Disk -IsReadOnly $false -ErrorAction Stop
-    
-    "$TimeStamp - ÉXITO: Disco montado y modo lectura/escritura activado." | Out-File -FilePath $LogPath -Append -Encoding utf8
+    if ($part) {
+        "$TimeStamp - INFO: Disco montado en $($part.DriveLetter):" | Out-File $LogPath -Append
+        exit 0
+    } else {
+        throw "El disco está online pero no se detectó letra de unidad."
+    }
 }
 catch {
-    "$TimeStamp - ERROR: No se pudo montar el disco. Detalle: $($_.Exception.Message)" | Out-File -FilePath $LogPath -Append -Encoding utf8
+    "$TimeStamp - ERROR MONTAJE: $($_.Exception.Message)" | Out-File $LogPath -Append
     exit 1
 }
